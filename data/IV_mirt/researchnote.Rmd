@@ -1,0 +1,371 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+library(tidyverse)
+library(haven)
+library(mirt)
+library(lavaan)
+set.seed(0728)
+polity <- read_sav("../data/polity5/p5v2018.sav")
+
+load("../data/wvs-longitudinal/WVS_TimeSeries_1981_2022_Rdata_v3_0.rdata")
+dat_wvs <- WVS_TimeSeries_1981_2022_spss_v3_0
+```
+
+
+# Prepare Data
+```{r}
+wvs <- dat_wvs %>% dplyr::select(
+  E001,
+  E003,
+  E005,
+  E226,
+  E229,
+  E233,
+  E224,
+  E227,
+  E230,
+  E231,
+  E233A,
+  COUNTRY_ALPHA,
+  COW_ALPHA,
+  COW_NUM,
+  S002VS,
+  S020
+)
+wvs$proj <- "wvs"
+
+var_clean <- function(x) {
+  ifelse(x %in% c(-5, -4, -3, -2, -1), NA_real_, x) #NA_real_是double缺失值，NA是逻辑缺失值
+}
+
+var_binary <- function(x) {
+  case_when(
+    x %in% c(0, 1, 2, 3, 4, 5) ~ 0,
+    x %in% c(6, 7, 8, 9, 10) ~ 1,
+  )
+}
+
+
+wvs <- wvs %>%
+  mutate(across(c(
+    E226,
+    E229,
+    E233,
+    E224,
+    E231,
+    E227,
+    E230,
+    E233A,
+    E001,
+    E003,
+    E005
+  ), var_clean)) %>%
+  mutate(across(c(
+    E226,
+    E229,
+    E233,
+    E231,
+    E224,
+    E227,
+    E230,
+    E233A
+  ), var_binary))
+# performance
+wvs$E001R <- wvs$E001
+wvs$E003R <- wvs$E003
+wvs$E005R <- wvs$E005
+
+wvs$E001R <- ifelse(wvs$E001R == 1, 1, 0)
+wvs$E003R <- ifelse(wvs$E003R == 3, 1, 0)
+wvs$E005R <- ifelse(wvs$E005R == 1, 1, 0)
+
+# procedual
+wvs$E001 <- ifelse(wvs$E001 == 3, 1, 0)
+wvs$E003 <- ifelse(wvs$E003 == 2 | wvs$E003 == 4, 1, 0)
+wvs$E005 <- ifelse(wvs$E005 == 2 | wvs$E005 == 3, 1, 0)
+
+# temp <- wvs
+# table(temp$E226)
+# table(temp$E226)
+wvs_normal <- wvs
+
+```
+
+```{r}
+procedural_democracy <- wvs_normal %>%
+  dplyr::select(E226, E229, E233) %>%
+  rename(
+    election = E226,
+    protection = E229,
+    women_right = E233
+  )
+performance_democracy <- wvs_normal %>%
+  dplyr::select(E224, E227, E230, E233A) %>%
+  rename(
+    rich_tax = E224,
+    unempolyment_aid = E227,
+    eco = E230,
+    inc_euqal = E233A
+  )
+
+
+procedural_democracy$election <- var_clean(procedural_democracy$election)
+procedural_democracy$protection <- var_clean(procedural_democracy$protection)
+procedural_democracy$women_right <- var_clean(procedural_democracy$women_right)
+performance_democracy$rich_tax <- var_clean(performance_democracy$rich_tax)
+performance_democracy$unempolyment_aid <- var_clean(performance_democracy$unempolyment_aid)
+performance_democracy$eco <- var_clean(performance_democracy$eco)
+performance_democracy$inc_euqal <- var_clean(performance_democracy$inc_euqal)
+```
+
+
+# CFA
+deprecated
+```{r efa, eval= FALSE}
+data_cfa <- cbind(procedural_democracy, performance_democracy)
+m_cfa <- " procedural  =~ election +protection + women_right
+              performance =~ rich_tax + unempolyment_aid
+              "
+
+cfa_fit <- cfa(m_cfa, data = data_cfa)
+fitMeasures(cfa_fit)
+summary(cfa_fit, fit.measures = TRUE, standardized = TRUE)
+# RMSEA < 0.8
+# SRMR <0.05
+
+efa_fit <- cfa(m_cfa, data = data_cfa)
+summary(efa_fit)
+
+
+anova()
+```
+
+# IRT
+```{r irt}
+library(mirt)
+
+getIrtScore <- function(data) {
+  irtPref <- mirt(data, 1, itemtype = "graded", SE = FALSE) # , control=list(method="CG", maxit=5000))
+  # print(summary(irtPref)$conv)
+  scores <- fscores(irtPref, method = "MAP", na.rm = FALSE)
+  return(scores)
+}
+
+procedural_score <- getIrtScore(procedural_democracy) %>%
+  as.tibble() %>%
+  rename(procedural_score = F1)
+performance_score <- getIrtScore(performance_democracy) %>%
+  as.tibble() %>%
+  rename(performance_score = F1)
+
+
+
+wvs_score <- bind_cols(wvs_normal, procedural_score, performance_score) %>% dplyr::select(COW_NUM, S020, procedural_score, performance_score)
+
+wvs_score <- wvs_score %>%
+  group_by(S020, COW_NUM) %>%
+  summarise(
+    performance = mean(performance_score, na.rm = TRUE),
+    procedural = mean(procedural_score, na.rm = TRUE)
+  )
+# wvs_score <- wvs_score %>%
+#   aggregate(.,FUN=mean,by=list(wvs_score$COW_NUM,wvs_score$S002VS)) %>%
+#   select(COW_NUM,S002VS,procedural_score,performance_score) %>%
+#   rename(COWcode = COW_NUM,
+#          wave = S002VS) %>%
+#   na.omit()
+```
+
+```{r country-year}
+wvs_plot1 <- wvs_score %>%
+  filter(!is.na(procedural) | !is.na(performance)) %>%
+  left_join(., Vdem[, c("COWcode", "country_name")], by = c("COW_NUM" = "COWcode"))
+
+
+plot1 <- ggplot(data = wvs_plot1) +
+  geom_point(aes(x = country_name, y = S002VS), shape = 15, size = 2.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.35, vjust = 0.5)) +
+  xlab("Country name") +
+  ylab("Wave")
+# plot1
+ggsave(plot1, file = "./fig/country_year_withcensor.pdf", width = 20, height = 2.5)
+
+# temp <-  wvs_score %>% filter(!is.na(performance_score) & !is.na(procedural_score))
+# length(unique(temp$COW_NUM))
+
+# unique(wvs_plot1$COW_NUM)
+
+length(unique(wvs_plot1$COW_NUM))
+wvs_plot2 <- wvs_score %>% filter(COW_NUM %in% unique(wvs_plot1$COW_NUM))
+
+length(unique(wvs_plot1$S002VS))
+wvs_plot2 <- wvs_score %>% filter(S002VS %in% unique(wvs_plot1$S002VS))
+```
+
+# DV
+Question: To what extent is the ideal of electoral democracy in its fullest sense achieved?
+
+Clariﬁcation: The electoral principle of democracy seeks to embody the core value of making rulers responsive to citizens, achieved through electoral competition for the electorate’s approval under circumstances when suﬀrage is extensive; political and civil society organizations can operate freely; elections are clean and not marred by fraud or systematic irregularities; and elections aﬀect the composition of the chief executive of the country. In between elections, there is freedom of expression and an independent media capable of presenting alternative views on matters of political relevance. In the V-Dem conceptual scheme, electoral democracy is understood as an essential element of any other conception of representative democracy liberal, participatory, deliberative, egalitarian, or some other.
+```{r vdem}
+library(mirt)
+Vdem <- readRDS("../data/Vdem/VDem_12.rds")
+Vdem <- Vdem %>%
+  dplyr::select(v2x_polyarchy, COWcode, year, country_id, country_name, country_text_id) %>%
+  rename(democracy_score = v2x_polyarchy)
+dem_mood_apsr <- read.csv("../replication/democratic_mood APSR_replication/dem_mood_apsr.csv")
+Vdem <- Vdem %>%
+  left_join(dem_mood_apsr[, c(
+    "COW_code",
+    "Year",
+    "lnGDP_imp",
+    "lnGDP_m1",
+    "GDP_cp_btw",
+    "GDP_cp_within",
+    "Corrup_TI_z",
+    "Corrup_TI_m1",
+    "Corrup_within",
+    "Corrup_btw", 
+    "Gini_SWIID",
+    "Educ_yrs_UN",
+    "Educ_yrs_m1",
+    "Gini_m1"
+  )],
+  by = c("COWcode" = "COW_code", "year" = "Year")
+  )
+
+```
+
+
+```{r old}
+Vdem <- Vdem %>%
+  mutate(wave = case_when(
+    2017 <= year & year <= 2022 ~ 7,  #<=:less than or equal to
+    2010 <= year & year <= 2015 ~ 6,
+    2005 <= year & year <= 2009 ~ 5,
+    2000 <= year & year <= 2004 ~ 4,
+    1995 <= year & year <= 1998 ~ 3,
+    1989 <= year & year <= 1991 ~ 2,
+    1981 <= year & year <= 1983 ~ 1,
+    TRUE ~ 0
+  )) %>%
+  filter(wave != 0) %>%
+  dplyr::select(-c(country_text_id, country_id)) %>%
+  left_join(wvs_score, by = c("COWcode" = "COW_NUM", "year" = "S020"))
+
+Vdem_thin <- Vdem %>%
+  filter(!is.na(procedural) | !is.na(performance)) %>%
+  group_by(country_name, wave) %>%
+  summarise(across(everything(), mean)) #across选择列语法，everything表示选择所有列，mean表示对所选择的列求平均
+```
+
+
+# Regresion
+```{r reg}
+names(Vdem)
+m1 <- lm(democracy_score ~ procedural + performance, data = Vdem)
+msummary(m1,output="gt", stars = TRUE)
+```
+
+
+```{r reg}
+m2 <- lm(democracy_score ~ procedural + performance + as.factor(year) + as.factor(country_name), data = Vdem)
+msummary(m2,output="gt", stars = TRUE)
+```
+
+
+```{r reg}
+# sig
+m3 <- lm(democracy_score ~ procedural + performance + as.factor(year) + as.factor(country_name) +
+  as.factor(year):as.factor(country_name), data = Vdem)
+msummary(m3,output="gt", stars = TRUE)
+# rocedural           -0.294384   0.092781  -3.173 0.001588 **
+# performance         0.193222   0.087520   2.208 0.027646 *
+```
+
+
+```{r reg}
+m3.1 <- lm(democracy_score ~ procedural + performance + as.factor(Year) + as.factor(country_name) +
+  as.factor(Year):as.factor(country_name) +
+  lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN, data = Vdem)
+temp <- broom::tidy(m3.1)
+summary(m3.1)
+
+m3.2 <- lm(democracy_score ~ procedural + performance + as.factor(Year) + as.factor(country_name) +
+  as.factor(Year):as.factor(country_name) +
+  lnGDP_m1 + Corrup_TI_m1 + Educ_yrs_m1 + Gini_m1, data = Vdem)
+summary(m3.2)
+
+m3.3 <- lm(democracy_score ~ procedural + performance + as.factor(Year) + as.factor(country_name) +
+  as.factor(Year):as.factor(country_name) +
+  lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN +
+  lnGDP_m1 + Corrup_TI_m1 + Educ_yrs_m1 + Gini_m1, data = Vdem)
+summary(m3.3)
+```
+
+
+```{r reg}
+# sig
+m3.4 <- lm(democracy_score ~ procedural + performance + as.factor(year) + as.factor(country_name) +
+  as.factor(year):as.factor(country_name) +
+  lnGDP_imp + Corrup_TI_z, data = Vdem)
+msummary(m3.4,output="gt", stars = TRUE)
+```
+
+
+```{r reg}
+# sig
+m3.5 <- lm(democracy_score ~ procedural + performance + as.factor(year) + as.factor(country_name) +
+  as.factor(year):as.factor(country_name) +
+  lnGDP_imp + Corrup_TI_z +
+  lnGDP_m1 + Corrup_TI_m1, data = Vdem)
+msummary(m3.5,output="gt", stars = TRUE)
+```
+
+
+```{r reg}
+stargazer::stargazer(m1, m2, m3, type = "text")
+
+library(plm)
+datap <- pdata.frame(Vdem_thin, c("country_name", "wave"))
+names(datap)
+datasp <- datap[order(datap$wave), ]
+m4 <- plm(democracy_score ~ procedural + performance, data = datasp, model = "within", effect = "twoways")
+summary(m4)
+
+m5 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN, data = datasp, model = "within", effect = "twoways")
+summary(m5)
+
+# signifi
+m6 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN +
+  lnGDP_m1 + Corrup_TI_m1 + Educ_yrs_m1 + Gini_m1, data = datasp, model = "within", effect = "twoways")
+summary(m6)
+
+
+m7 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+summary(m7)
+
+# sig
+m8 <- plm(democracy_score ~ procedural + performance + GDP_cp_within + procedural +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+summary(m8)
+
+
+m9 <- plm(democracy_score ~ procedural + performance + GDP_cp_within + procedural,
+  data = datasp, model = "within", effect = "twoways"
+)
+summary(m9)
+```
+
+
+# TODO
+1. 诊断stan结果
+
+

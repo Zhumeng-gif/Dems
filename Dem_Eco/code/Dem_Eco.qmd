@@ -1,0 +1,458 @@
+---
+title: "Dem_Eco"
+format: html
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "")
+getwd()
+set.seed(313)
+options (warn = -1)
+
+# package loading
+library(pacman)
+p_load(
+    mirt,
+    kableExtra,
+    psych, #KMOtest
+    mediation,
+    MASS,
+    car,
+    here,
+    glue,
+    tidyverse,
+    stargazer,
+    dotwhisker,
+    modelsummary
+)
+```
+
+# wvs7
+
+```{r WVS7_prepare,include=FALSE}
+
+# data loading
+wvs7 <- readRDS("../data/WVS7.rds") #导入数据
+
+# data management
+wvs7$id <- as.factor(wvs7$D_INTERVIEW) 
+wvs7$year <- wvs7$A_YEAR #年份命名
+wvs7$countryCode <- wvs7$B_COUNTRY #国家命名
+wvs7$countryN <- wvs7$B_COUNTRY_ALPHA
+wvs7$cowN<- wvs7$C_COW_NUM
+wvs7$cowCode <- wvs7$C_COW_ALPHA
+wvs7$wt <- wvs7$W_WEIGHT
+wvs7[wvs7 < 0] <- NA #将不符合问卷选项的回答标记为NA
+
+
+
+
+# Personal character
+wvs7$sex_q260 <- wvs7$Q260 - 1 #性别
+wvs7$birth_q261 <- wvs7$Q261 #出生年
+wvs7$age_q262 <- wvs7$Q262 #年龄
+wvs7$rural <- wvs7$H_URBRURAL - 1 #(1:urban 2:rural)
+wvs7$immigration_q263 <- wvs7$Q263 - 1 #是否出生在这个国家还是移民(1:本地人；2:移民)
+wvs7$marriage_q273 <- if_else(wvs7$Q273 == 1, 1, 0) # 婚姻情况(1:已婚 2:像结婚一样生活在一起 3:离婚 4:分居 5:丧偶 6:单身)
+wvs7$citen_q269 <- wvs7$Q269 - 1 #你是这个国家的公民吗(1: yes；2:no)
+wvs7$edu_q275 <- wvs7$Q275 #教育水平(原始数据0-8)
+wvs7$eduR_q275R <- wvs7$Q275R #教育水平（重新划分为1-3）
+
+
+# wvs7$party_q98 <- wvs7$Q98 #党派成员
+# wvs7$party_q98[wvs7$party_q98 == '1|2'] <- 1 #将活跃和不活跃的都变成是否
+wvs7$jobSector_q284 <- wvs7$Q284 #(1:goverment 2:private sector 3:NGO)
+wvs7$socialLevel_q287 <- wvs7$Q287#(1:upper 2:upper middle 3:lower meddle 4:working 5:lower)
+wvs7$incomeLevel_q288 <- wvs7$Q288 #(家庭收入属于哪一类群体 1:低收入 10:高收入)
+wvs7$reilious_q289 <- wvs7$Q289#将属于新教和天主教的教徒单独编码 新教伦理与资本主义精神
+wvs7$race_q290 <- wvs7$Q290 #(种族 1:白人 2:黑人 3:南亚印第安人 4:中国/日本等东亚黄种人 5:阿拉伯/中亚 6:其他)
+# !种族这里的编码好像不对，记得去看数据
+wvs7$generation <- case_when(
+  wvs7$Q261 < 1950 ~ "Founding Time",
+  wvs7$Q261 >= 1950 & wvs7$Q261 < 1966 ~ "Before Cultural Revolution",
+  wvs7$Q261 >= 1966 & wvs7$Q261 < 1978 ~ "Cultural Revolution",
+  wvs7$Q261 >= 1978 ~ "Reform and Opening-Up",
+  TRUE ~ as.character(wvs7$Q261)
+) %>%
+  factor(levels = c(
+    "Founding Time",
+    "Before Cultural Revolution",
+    "Cultural Revolution",
+    "Reform and Opening-Up"
+  )) #这一列主要对中国居民进行编码
+
+# media
+media_ratio <- function() {
+  total <-
+    rowSums(dplyr::select(wvs7, Q201:Q203), na.rm = TRUE) # 传统媒介：报纸/电视/无线电
+  tvRadio <-
+    rowSums(dplyr::select(wvs7, Q204:Q208), na.rm = TRUE) ## 新媒介：手机/电子邮件/互联网/社交媒体/与朋友交谈
+  ratio <-
+    tvRadio / total # to what extent one use new media more than traditional
+  return(ratio)
+}
+
+wvs7$mediaR_q201q208 <- media_ratio()
+wvs7$mediaT <- rowSums(dplyr::select(wvs7, Q201:Q203), na.rm = TRUE)
+wvs7$mediaN <- rowSums(dplyr::select(wvs7, Q204:Q208), na.rm = TRUE)
+wvs7$internet_q206 <- wvs7$Q206
+
+# Social values/attitudes
+wvs7$imFam_q1 <- wvs7$Q1 #家庭/朋友/空闲时间/政治/工作/宗教的重要性
+wvs7$imFri_q2 <- wvs7$Q2
+wvs7$imLei_q3 <- wvs7$Q3
+wvs7$imPol_q4 <- wvs7$Q4
+wvs7$imWor_q5 <- wvs7$Q5
+wvs7$imRel_q6 <- wvs7$Q6
+
+## child qualities 哪些品质对孩子重要
+wvs7$chManner_q7 <- wvs7$Q7 - 1
+wvs7$chIndepence_q8 <- wvs7$Q8 - 1
+wvs7$chWork_q9 <- wvs7$Q9 - 1
+wvs7$chResponsibility_q10 <- wvs7$Q10 - 1
+wvs7$chImagination_q11 <- wvs7$Q11 - 1
+wvs7$chTolerance_q12 <- wvs7$Q12 - 1
+wvs7$chSaving_q13 <- wvs7$Q13 - 1
+wvs7$chDetermination_q14 <- wvs7$Q14 - 1
+wvs7$chRelFaith_q15 <- wvs7$Q15 - 1
+wvs7$chUnself_q16 <- wvs7$Q16 - 1
+wvs7$chObey_q17 <- wvs7$Q17 - 1
+wvs7$chExpress_q18 <- wvs7$Q18 - 1
+
+## Neighbour 不想有的邻居（1 提到； 2 没有提到）
+wvs7$neiDrug_q18 <- wvs7$Q18 - 1
+wvs7$neiRace_q19 <- wvs7$Q19 - 1
+wvs7$neiAids_q20 <- wvs7$Q20 - 1
+wvs7$neiImmi_q21 <- wvs7$Q21 - 1
+wvs7$neiHomo_q22 <- wvs7$Q22 - 1
+wvs7$neiReli_q23 <- wvs7$Q23 - 1
+wvs7$neidrink_q24 <- wvs7$Q24 - 1
+wvs7$neiUnmarried_q25 <- wvs7$Q25 - 1 
+wvs7$neiLanguage_q26 <- wvs7$Q26 - 1
+
+## 工作(1: 完全同意；5:完全不同意) 
+wvs7$jobAim_q27 <- 6 - wvs7$Q27 #我生活中的一个主要目标是让我的父母感到骄傲\
+wvs7$leadPolity_q29 <- 6 - wvs7$Q29 #总的来说，男人比女人能过成为更好的政治领袖
+wvs7$eduWomen_q30 <- 6 - wvs7$Q30 # 大学教育对男孩比对女孩更重要
+wvs7$businessCeo_q31 <- 6 - wvs7$Q31 # 总的来说，男人商业领域比女人做得更好
+wvs7$jobhousewife_q32 <- 6 - wvs7$Q32 #做一名家庭主妇和为薪水而工作一样有成就感
+wvs7$jobWomen_q33 <- 6 - wvs7$Q33 #工作稀缺时，男性应该比女性有更多的工作权利
+wvs7$jobImmigrant_q33 <- 6 - wvs7$Q34 #当就业机会稀缺时，雇主应该优先考虑这个国家的人 而不是移民
+wvs7$jobLazy_q39 <- wvs7$Q39 #不工作的人会变得懒惰
+wvs7$jobDuty_q40 <- wvs7$Q40 #工作是对社会的义务
+# Happyness 模块2 生活满意度
+wvs7$freeChoice_q48 <- wvs7$Q48 #1:根本没有选择; 10: 很大的选择
+wvs7$happyLife_q49 <- wvs7$Q49 #你对你的整个生活有多满意？(1:完全不满意，10 :完全满意)
+wvs7$happyfamEoc_q49 <- wvs7$Q49  # 对家庭经济状况的满意度
+wvs7$happylifeT_q56 <- Recode(wvs7$Q56,"2 = 0; 3 = 1; 1 = 2") #生活水平的代际差异：比较你的生活水平和你父母在你这个年龄时的生活水平，你会说你的生活更好，更糟，还是差不多？ （1:更好; 2:更糟糕;3:差不多）
+
+
+# Basic kinds of attitudes concerning society 对社会的基本态度
+wvs7$attituSociety_q42 <- wvs7$Q42
+# 1:我们社会组织的整个过程必须通过革命行动彻底改变
+# 2:我们的社会必须通过改革逐步改善 
+# 3:我们现在的社会必须勇敢地抵御一切颠覆势力
+
+# socailCapital and socialTrust 模块3 社会信任
+
+wvs7$trustCom_q57 <- wvs7$Q57 #一般来说，您认为大多数人是可以信任的，还是和人相处要越小心越好
+wvs7$trustFam_q58 <- 5 - wvs7$Q58 #请问您对家人是非常信任、比较信任、不太信任，还是非常不信任
+wvs7$trustNei_q59 <- 5 - wvs7$Q59 #请问您对熟人是非常信任、比较信任、不太信任，还是非常不信任
+wvs7$trustPer_q60 <- wvs7$Q60 #你认识的人
+wvs7$trustFir_q61 <- wvs7$Q61 #你第一次见到的人
+wvs7$trustReli_q62 <- wvs7$Q62 #信仰另一种宗教的人
+wvs7$trustNation_q63 <- wvs7$Q63 #其他国籍的人
+
+
+wvs7$trustchurch_q64 <- 5 - wvs7$Q64 #对教堂的信任度如何
+wvs7$trustArmy_q65 <- 5- wvs7$Q65 #对军队的信任度如何
+wvs7$trustPress_q66 <- 5 - wvs7$Q66 #新闻出版社
+wvs7$trustTV_q67 <- 5 - wvs7$Q67 #电视
+wvs7$trustUnion_q68 <- 5 - wvs7$Q68  #工会
+wvs7$trustPolice_q69 <- 5 - wvs7$Q69 #对警察的信任度如何
+wvs7$trustCourt_q70 <- 5 - wvs7$Q70 #对法院的信任度如何
+wvs7$trustGoverment_q71 <- 5 - wvs7$Q71 #对政府的信任度如何
+wvs7$trustParty_q72 <- 5-wvs7$Q72 #对政党的信任度如何
+wvs7$trustParliament_q73 <- 5 - wvs7$Q73 #对人民代表大会的信任度如何
+wvs7$trustCicil_q74 <- 5 - wvs7$Q74 #civil service
+wvs7$trustUniversity_q75 <- 5 - wvs7$Q75 #大学
+wvs7$trustElect_q76 <- 5 - wvs7$Q76 #选举
+wvs7$trustCompany_q77 <- 5 - wvs7$Q77 #大公司
+wvs7$trustOrgEnvir_q79 <- 5 - wvs7$Q79 #环保组织
+wvs7$trustOrgWomen_q80 <- 5 - wvs7$Q80 #妇女组织
+wvs7$trustUN_q83 <- 5 - wvs7$Q83 #联合国
+wvs7$trustIMF_q84 <- 5 - wvs7$Q84 #IMF
+wvs7$trustICC_q85 <- 5 - wvs7$Q85 #ICC
+wvs7$trustWB_q87 <- 5 - wvs7$Q87 #WB
+wvs7$trustWHO_q83 <- 5 - wvs7$Q88 #WHO
+wvs7$trustWTO_q89 <- 5 - wvs7$Q89 #WTO
+
+
+##  International Organization 国际组织
+wvs7$igDvsE_q90 <- wvs7$Q90 #国际组织应该优先改善人民的生活，即使这可能意味着决 策不是民主作出的。 你认为国际组织应该优先考虑、有效还是民主？(1:effective 10:democracy)
+wvs7$igUN_q91 <- Recode(wvs7$Q91,"3 = 0; 1 = 1; 2 = 1")#五个国家在联合国安全理事会拥有常任席位。 哪个以下之一不是成员？ A)法国，B)中国，C)印度 (a:1 b:2 c:3) 现在重新编码，将回答印度的3赋值为0.回答中国和法国的1和2都赋值为1
+wvs7$igIMF_q92 <- Recode(wvs7$Q92,"1 = 1; 2 = 0; 3 = 0 ") #国际货币基金组织（货币基金组织）总部设在哪里？ A)华盛顿特区，B)伦敦，C)日内瓦 (a:1; b:2; c:3)  
+wvs7$igAI_q93 <- Recode(wvs7$Q93,"2 = 1; 1 = 0; 3 = 0") #大赦国际组织处理下列哪一个问题？ A)气候变化，B)人权，C)破坏历史古迹
+
+
+wvs7$orgReligious_q94 <- wvs7$Q94
+wvs7$orgsport_q95 <- wvs7$Q95
+wvs7$orgCulture_q96 <- wvs7$Q96
+wvs7$orgLabour_q97 <- wvs7$Q97
+wvs7$orgParty_q98 <- wvs7$Q98
+wvs7$orgEnvir_q99 <- wvs7$Q99
+wvs7$orgProfession_q100 <- wvs7$Q100
+wvs7$orgHuman_q101 <- wvs7$Q101
+wvs7$orgConsumer_q102 <- wvs7$Q102
+wvs7$orgSelf_q103 <- wvs7$Q103
+wvs7$orgWomen_q104 <- wvs7$Q104
+wvs7$orgOther_q105 <- wvs7$Q105
+
+# economy values
+wvs7$incomeEqual_q106 <- wvs7$Q106 # 应该鼓励收入平等还是收入差距(income equal vs large income difference)
+wvs7$ownership_q107 <- wvs7$Q107 # 应该提高私有制还是国有制(private vs state/government ownership of business)
+wvs7$responsibility_q108 <- wvs7$Q108 # 人们应该承担更多的责任来自给自足还是政府应承担更多责任以确保每个人都有
+wvs7$competition_q109 <- wvs7$Q109 #竞争是好的还是坏的（越靠近1认为越好）
+wvs7$work_q110 <- wvs7$Q110 # 努力工作vs运气 的重要性（越靠近1认为努力工作越重要）
+wvs7$priority_q11 <- wvs7$Q111 # 经济增长和环境谁优先（1:环境重要 2：经济增长重要 3:其他）
+
+# corruptuion
+wvs7$corPer_q112 <- wvs7$Q112 # 是否存在腐败(1:不存在；10:腐败严重)
+wvs7$corState_q113 <- wvs7$Q113 #您认为中央政府机关有多少人卷入了腐败(1:没有; 2: 少部分人；3: 大多数人 4: 所有人 )
+wvs7$corBusi_q114 <- wvs7$Q114 # 商务部门主管(business executives)有多少人卷入了腐败
+wvs7$corLocal_q115 <- wvs7$Q115 #您认为地方政府机关有多少人卷入了腐败
+wvs7$corPublic_q116 <- wvs7$Q116 #您认为公共服务机构(police/civil servants/ doctor/teachers)有多少人卷入了腐败
+wvs7$corMedia_q117 <- wvs7$Q117 # 您认为记者/媒体有多少人卷入了腐败
+wvs7$corrisk_q120 <- wvs7$Q120 # 在这个国家，因提供或收受贿赂、礼物或好处以换取公共服务而被追究责任的风险有多大？ 为了表达您的意见，请使用 10 分制，其中“1”表示“完全没有风险”，“10”表示“非常高风险”。
+
+# migration 
+wvs7$immiDev_q121 <- wvs7$Q121 #移民对发展的影响(5:very good vs 1：very bad)
+
+# security 安全感知
+wvs7$security_q131 <- 5 - wvs7$Q131 # 安全感知(1:非常安全；4：一点都不安全)
+
+## 在过去的一年中，您或您家庭成员是犯罪的受害者吗？
+wvs7$victimPer_q144 <- wvs7$Q144 #受访者
+wvs7$victimFam_q145 <- wvs7$Q145 #受访者家庭成员
+
+## Worry 您在多大程度上担心以下事情会发生：
+wvs7$worryLose_q142 <- 5 - wvs7$Q142 #失去我的工作或找不到工作(1:great;4:not at all)
+wvs7$worryChild_q143 <- 5 - wvs7$Q143 #不能给我的孩子一个好的教育
+wvs7$worryWarEx_q146 <- 5 - wvs7$Q146 #涉及我国的战争
+wvs7$worryAttack_q147 <- 5 - wvs7$Q147 #恐怖袭击
+wvs7$worryWarIn_q148 <- 5 - wvs7$Q148 #内战
+
+## 在过去的12个月中，您或您的家人多久有一次？(1:often; 4:never)
+wvs7$frencyFood_q51 <- 5 - wvs7$Q51 #没有足够的食物吃
+wvs7$frencyUnsafe_q52 <- 5 - wvs7$Q52 #因为家周边的犯罪而感到不安全
+wvs7$frencyMedicine_q53 <- 5 - wvs7$Q53 #没有药物或医疗服务
+wvs7$frencyIncome_q54 <- 5 - wvs7$Q54 #没有现金收入
+wvs7$frencyShelter_q55 <- 5 - wvs7$Q66 #没有安全的庇护所
+
+wvs7$freedom_equal_q149 <- wvs7$Q149 - 1 # 自由和平等谁更重要(1:自由；2：平等)
+wvs7$freedom_security_q150 <- wvs7$Q150 - 1 # 自由和安全谁更重要(1:自由；2: 安全)
+wvs7$nationlity_q151 <- wvs7$Q151 - 1  # 是否愿意为国家而战(1:yes; 2:no)
+
+
+#  postmateralist value  后物质主义价值观
+wvs7$aimF_q152 <- wvs7$Q152 # 未来十年国家的发展目标1(第一选择 1:高水平经济增长；2:强大国防；3:人们在公共事务中有更多话语权；4:努力建设美丽的城市和乡村。1&2是物质主义价值观，3&4是后物质主义价值观)
+wvs7$aimS_q153 <- wvs7$Q153 # 未来十年国家的发展目标1(第二选择)
+wvs7$aimF_q154 <- wvs7$Q154 # 未来十年国家的发展目标2(第一选择 1:维护国家秩序；2:人们在政府决策中有更多的发言权；3:打击物价上涨；4:保护言论自由 1&3是物质主义价值观)
+wvs7$aimS_q155 <- wvs7$Q155 # 未来十年国家的发展目标2(第二选择)
+wvs7$aimF_q156 <- wvs7$Q156 # 未来十年国家的发展目标3(第一选择 1:稳定经济；2:构建更人性化的社会；3:构建观念比财富更重要的社会；4:打击犯罪 1&4是物质主义)
+wvs7$aimS_q157 <- wvs7$Q157 # 未来十年国家的发展目标3(第二选择)
+
+# Science and techlonogy
+wvs7$tech_q163 <- wvs7$Q163 #考虑到所有因素，您是否会说，由于科学和技术，世界会更好，或者更糟？请告诉我哪个规模最接近您的观点：1:世界更加糟糕;10:世界要好得多
+
+# religious value 宗教价值观
+wvs7$reliGod_q164 <- wvs7$Q164 # 上帝的重要性(1:一点也不重要 10:很重要)
+wvs7$reliAttend_q171 <- wvs7$Q171 #你现在多久参加一次宗教仪式？(1-7)
+wvs7$reliIdentify_q173 <- Recode(wvs7$Q173,"1 = 1; 2 = 0; 3 = 0 ") #宗教r自我认同(1:虔诚者;2:不是宗教人士;3:无神论者) 
+wvs7$reliMean1_q175 <- wvs7$Q175 #宗教生活的真谛是 遵循宗教规范和仪式 vs 对别人做好人好事
+wvs7$reliMean2_q174 <- wvs7$Q174 #宗教生活的真谛是 理解死后生活 vs 理解现实生活
+
+
+# ethical value 道德价值观(这里包含伦理价值观的测量) socialTolerance
+wvs7$toleranceHomo_q182 <- wvs7$Q182 #hemosexcuality 同性恋 （1:不赞同 10:永远赞同）
+wvs7$tolerancePros_q183 <- wvs7$Q183 #prostitution 卖淫
+wvs7$toleranceAbor_q184 <- wvs7$Q184 # abortion 堕胎
+wvs7$toleranceDivo_q185 <- wvs7$Q185 # divorce 离婚
+wvs7$toleranceSexb_q186 <- wvs7$Q186 #sex before marriage 婚前性行为
+wvs7$toleranceSuic_q187 <- wvs7$Q187 #suicide 自杀
+wvs7$toleranceEuth_q188 <- wvs7$Q188 #Euthanasia 安乐死
+wvs7$toleranceBeat_q190 <- wvs7$Q190 #parents beating children 父母打孩子
+wvs7$toleranceViolO_q191 <- wvs7$Q191 #violence against other people 对他人实行暴力
+wvs7$toleranceTerr_q192 <- wvs7$Q192 # terrorism 恐怖主义
+wvs7$toleranceViolP_q194 <- wvs7$Q194 #political violence 政治暴力
+wvs7$tolerancePena_q195 <- wvs7$Q195 # death penalty 死刑
+
+## 您是否认为您国家的政府应该或不应该有权进行以下操作
+wvs7$goverSurVeil_q196 <- wvs7$Q196 #在公共区域对人们进行视频监控
+wvs7$goverMonitor_q197 <- wvs7$Q197 #监控互联网上交换的所有电子邮件和任何 其他信息
+wvs7$goverCollect_q198 <- wvs7$Q198 #收集任何住在该国家的人的信息
+
+
+# political participation
+## polity interset 政治兴趣
+wvs7$polityInterst_q199 <- 5 - wvs7$Q199 # 你觉得你对政治有多感兴趣(1:very; 4 :not at all)
+wvs7$polityDiscuss_q200 <- 4 - wvs7$Q200 # 当和朋友聚在一起时，你会经常讨论政治问题，偶尔还是从不讨论？（1:经常；3:从不）
+
+
+## political action
+wvs7$actionypetition_q209 <- wvs7$Q209 #签署请愿书（1:已经做过；2:或许/可能会做；3:永远不会做）
+wvs7$actionboycotts_q210 <- wvs7$Q210 #参加抵制
+wvs7$actiondemonstration_q211 <- wvs7$Q211 #参加和平示威
+wvs7$actionstrikes_q212 <- wvs7$Q212 #参加罢工
+
+## socail activism 人们可以采取的这些形式的政治行动和社会行动呢？ 请告诉我，如果你做过任何这些事情，你是否可以做，或者 在任何情况下都不会做
+wvs7$saDonate_q213 <- wvs7$Q213 #给某个团体/运动捐赠
+wvs7$saContact_q214 <- wvs7$Q214 #与政府官员联系
+wvs7$saEnconrageT_q215 <- wvs7$Q215 #鼓励他人就政治问题采取行动
+wvs7$saEncourageV_q216 <- wvs7$Q216 #鼓励他人投票
+
+## political actions use Internet
+wvs7$paiSearch_q217 <- wvs7$Q217 #搜索有关政治和政治事件的信息
+wvs7$paiSign_q218 <- wvs7$Q218 #签署电子请愿书
+wvs7$paiEncourage_q219 <- wvs7$Q219 #鼓励其他人采取任何形式的政治行动
+wvs7$paoOrganize_q220 <- wvs7$Q220 #组织政治活动，活动，抗议活动
+
+## vote 在地方还是国家层面投票的频率(1:always；4:never)
+wvs7$voteLocal_q221 <- 5 - wvs7$Q221 # local
+wvs7$voteState_q222 <- 5 - wvs7$Q222 
+
+## How often in country's elections 在你看来，在这个国家的选举中，下列事情多久发生一次？
+wvs7$voteFair_q224 <- 5 - wvs7$Q224 #选票是公平计算的
+wvs7$voteOpposit_q225 <- 5 - wvs7$Q225 #反对派候选人无法参选
+wvs7$voteTV_q226 <- 5 - wvs7$Q226 #电视新闻有利于执政党
+wvs7$voteBribed_q227 <- 5 - wvs7$Q227 #选民受到贿赂
+wvs7$voteJournalist_q228 <- 5 - wvs7$Q228 #记者对选举进行公平报道
+wvs7$voteOfficial_q229 <- 5 - wvs7$Q229 # 选举官员是公平的
+wvs7$voteRichbuy_q230 <- 5 - wvs7$Q230 #富人购买选举
+wvs7$voteViolence_q231 <- 5 - wvs7$Q231 #选民在选举中受到暴力威胁
+wvs7$voteChoice_q232 <- 5 - wvs7$Q232 #选民可以在选举中作出真正的选择
+wvs7$voteWomen_q233 <- 5 - wvs7$Q233 #女性拥有平等的管理办公室的机会
+wvs7$votHonest_q234 <- 5 - wvs7$Q234  #有些人认为举行诚实的选举对他们的生活有很大的影响；另一些人则认为这无关紧要。 你会说对你来说 举行诚实的选举有多重要-非常重要，相当重要，不是很重要，或者根本不重要？
+
+
+# political culture and regimes
+wvs7$sysLead_q235 <- 5 -wvs7$Q235 # 有一个不必为议会选举的强大领导人(1:very good 4:very bad 所以用5减 反向赋值)
+wvs7$sysExpert_q236 <- 5 - wvs7$Q236
+wvs7$sysArmy_q237 <- 5 - wvs7$Q237 # 有军队统治
+wvs7$sysDemo_q238 <- 5 - wvs7$Q238 # 拥有民主的政治体系
+wvs7$sysRegi_q239 <- 5 - wvs7$Q239 # 由不需要政党或选举的宗教法律管辖的制度
+wvs7$sysPerf_q252 <- wvs7$Q252 #对当前政治体系/制度表现的满意度 satisfaction with the political performrance
+wvs7$sysSpee_q234a <- 6 - wvs7$Q234A #您会说您所在国家的政治制度使像您这样的人有多少发言权？(1:great deal;5:not at all)
+wvs7$indiviRight_q253 <- 5 - wvs7$Q253 #对人权的尊重(反向赋值后 越高越尊重)
+wvs7$prideNation_q254 <- 5- wvs7$Q254 #国家自豪感
+
+
+## 民主的基本特征
+wvs7$demoTax_q241 <- wvs7$Q241 #政府向富人征税补贴穷人
+wvs7$demoRegilous_q242 <- wvs7$Q242 #宗教当局拥有法律最终解释权
+wvs7$demoSelect_q243 <- wvs7$Q243 #自由选择领导人
+wvs7$demoAid_q244 <- wvs7$Q244 #国家救济失业人员
+wvs7$demoArmy_q245 <- wvs7$Q245 #军队接管无能政府
+wvs7$demoCivil_q246 <- wvs7$Q246 #公民权利免受国家压迫
+wvs7$demoEquality_q247 <- wvs7$Q247 #国家需要促进收入平等
+wvs7$demoObey_q248 <- wvs7$Q248 #人们服从领导人
+wvs7$demoWomen_q249 <- wvs7$Q249 #妇女与男子享有同等权利
+wvs7$demoImportance_q250 <- wvs7$Q250 #认为民主的重要性 importance of democracy
+wvs7$demoLevel_q251 <- wvs7$Q251 #国家的民主水平
+
+```
+
+```{r IV}
+wvs7$liber <- select(wvs7,demoSelect_q243, demoCivil_q246, demoWomen_q249) %>%
+  rowMeans(na.rm = TRUE)
+wvs7$autho <- select(wvs7, demoRegilous_q242, demoAid_q244, demoArmy_q245, demoEquality_q247, demoObey_q248) %>%
+  rowMeans(na.rm = TRUE)
+
+temp <- group_by(wvs7, countryCode) %>%
+  summarise(
+    liberC = weighted.mean(liber, w = wt, na.rm = TRUE),
+    authoC = weighted.mean(autho, w = wt, na.rm = TRUE)
+  )
+#save
+wvs7 <- left_join(wvs7, temp)
+wvs7$conceptLA <-wvs7$liberC - wvs7$authoC
+WVS7 <- select(WVS7,549:769)
+write.csv(WVS7,file = "/Users/zhumeng/Desktop/project/Dem_Eco/data/WVS7.csv")
+```
+
+```{r descriptive}
+#| warning = FALSE
+wvs7$popWB2019L <- log(wvs7$popWB2019)
+wvs7$GDPpercap1 <- wvs7$GDPpercap1 + 0.01
+wvs7$gdpL <- log(wvs7$GDPpercap1)
+wvs7$gini <- wvs7$giniWB
+wvs7$laborL <- log(wvs7$laborforce)
+
+datasummary(
+    data = wvs7,
+    output = "flextable",
+    (`民主观念` = conceptLA) +
+        (`人均GDP` = gdpL) +
+        (`人口数量(log)` = popWB2019L) +
+        (`劳动力数量` = laborL) +
+        (`人力资本增长` = popgrowth) +
+        (`人力资本` = lifeexpect)  ~
+        (Mean + SD + Min + Max + (Number = N)),
+    title = "描述性统计",
+    notes = "来源：第七波世界价值观调查。"
+) %>%
+    flextable::autofit()
+```
+
+```{r regression}
+ls_ctrl <- c("lifeexpect","popgrowth","gini","laborL","urbanpop","educationexp")
+ls_iv <- c("conceptLA")
+ls_ov <- c("gdpL")
+
+ls_model <- paste(ls_ctrl, collapse = " + ") %>% 
+    paste0(ls_ov, " ~ conceptLA + ", .)
+
+result_effect <- map(ls_model, ~ lm(., data = wvs7))
+stargazer(result_effect,
+          type = "text",
+          title = "Effects of English on Efficacy",
+          align = TRUE,
+          omit.stat = c("LL","ser","f"),
+          out="Regression Results of English.word") 
+
+df_plot_effect <- map2_df(result_effect, 
+                          c("人均GDP增长"), 
+                          ~ tidy(.x) %>% 
+                              filter(!str_detect(term,  "^pro|^0.|^-0.")) %>% 
+                              mutate(model = .y))
+dwplot(df_plot_effect) %>% 
+    relabel_predictors(c(
+        conceptLA = "民主观念", 
+        lifeexpect = "人力资本", 
+        popgrowth = "人力资本增长", 
+        labroL = "劳动力数量(log)",
+        gini = "基尼系数",
+        urbanpop = "城市人口",
+        educationexp  = "教育支出")) +
+    geom_vline(xintercept = 0, colour = "grey60", linetype = 2) +
+    #scale_color_gb(palette = "digitMixed") +
+    facet_grid(~ model) + 
+    theme(legend.position = "none",
+          plot.caption = element_text(hjust = 0),
+           text = element_text(family = "STSongti-SC-Black",size = 12)) +
+    labs(caption = "来源：第七波世界价值观调查")
+```
+
+```{r dataChina}
+#| eval = F
+#| echo = F
+# select data from China
+wvs7China <- subset(wvs7, countryCode == "156") %>%
+    dplyr::select(549:569) #选择中国这个国家中的上述变量
+
+wvs7China$country <- as.character(wvs7China$country) %>%
+    dplyr::recode(
+        "156" = "China") # 将编号为156的国家编码为中国
+```

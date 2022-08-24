@@ -1,0 +1,350 @@
+---
+title: "researchnote-stan"
+format:
+  html:
+    number-sections: true
+editor: visual
+---
+
+# load
+
+```{r message = FALSE, warning = FALSE}
+library(tidyverse)
+library(haven)
+library(modelsummary)
+library(kableExtra)
+library(plm)
+```
+
+# 七个变量
+
+使用七个变量生成两个IV（E226,E229,E233为绩效民主；E224,E227,E230,E233A为程序民主），时间跨度为2005-2022，观察值数量为1026左右。
+
+## DV
+
+Question: To what extent is the ideal of electoral democracy in its fullest sense achieved?
+
+Clariﬁcation: The electoral principle of democracy seeks to embody the core value of making rulers responsive to citizens, achieved through electoral competition for the electorate's approval under circumstances when suﬀrage is extensive; political and civil society organizations can operate freely; elections are clean and not marred by fraud or systematic irregularities; and elections aﬀect the composition of the chief executive of the country. In between elections, there is freedom of expression and an independent media capable of presenting alternative views on matters of political relevance. In the V-Dem conceptual scheme, electoral democracy is understood as an essential element of any other conception of representative democracy liberal, participatory, deliberative, egalitarian, or some other.
+
+```{r vdem}
+Vdem <- readRDS("../data/Vdem/VDem_12.rds")
+Vdem <- Vdem %>%
+  dplyr::select(v2x_polyarchy, COWcode, year, country_id, country_name, country_text_id) %>%
+  rename(democracy_score = v2x_polyarchy)
+dem_mood_apsr <- read.csv("../replication/democratic_mood APSR_replication/dem_mood_apsr.csv") 
+  # rename( COWcode= COW_code,
+  #         year = Year)
+Vdem <- Vdem %>%
+  left_join(dem_mood_apsr[, c(
+    "COW_code",
+    "Year",
+    # "COWcode",
+    # "year",
+    "lnGDP_imp",
+    "lnGDP_m1",
+    "GDP_cp_btw",
+    "GDP_cp_within",
+    "Corrup_TI_z",
+    "Corrup_TI_m1",
+    "Corrup_within",
+    "Corrup_btw", 
+    "Gini_SWIID",
+    "Educ_yrs_UN",
+    "Educ_yrs_m1",
+    "Gini_m1",
+    "ISO_code"
+  )],
+  by = c("COWcode" = "COW_code", "year" = "Year","country_text_id" ="ISO_code")
+  # by = c("country_text_id" ="ISO_code", "year" = "Year")
+  ) %>% 
+  distinct()
+
+```
+
+```{r stan-demo-merge}
+stan_procedual <- readRDS("../data/stan_procedual.rds")
+stan_performance <- readRDS("../data/stan_performance.rds")
+Vdem <- Vdem %>% 
+  rename( "Country" = "country_text_id",
+          "Year" = "year")
+Vdem <- Vdem %>% 
+  left_join(stan_performance) %>% 
+  rename( "performance" ="Satis_trim") %>% 
+  distinct()
+Vdem <- Vdem %>% 
+  left_join(stan_procedual) %>% 
+  rename( "procedural" ="Satis_trim") %>% 
+  distinct()
+
+Vdem_thin <- Vdem %>%
+  filter(!is.na(procedural) | !is.na(performance)) %>% 
+  distinct() 
+```
+
+## Plot: country-year
+
+数据的格式，数据共`r length(unique(Vdem_thin$COWcode))`个国家，`r length(unique(Vdem_thin$Year))`年。以下为数据表的前六行，表中协变量名在下文回归表中有解释。协变量均来自于Claassen论文。
+
+```{r echo = FALSE}
+head(Vdem_thin) %>% kable() %>% kable_styling()
+```
+
+横轴为国家，纵轴为年份，使用贝叶斯方法后，数据点是满的。如果使用IRT方法，则只有300多个数据。
+
+```{r country-year}
+plot1 <- ggplot(data = Vdem_thin) +
+  geom_point(aes(x = country_name, y = Year), shape = 15, size = 2.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.35, vjust = 0.5)) +
+  xlab("Country name") +
+  ylab("Year")
+plot1
+```
+
+## Regresion
+
+```{r lm}
+m1 <- lm(democracy_score ~ procedural + performance, data = Vdem)
+# msummary(m1,output="gt", stars = TRUE)
+```
+
+### Linear Model for Panel Data
+
+```{r reg-plm}
+datap <- pdata.frame(Vdem_thin, c("Country", "Year"))
+# names(datap)
+datasp <- datap[order(datap$Year), ]
+m4 <- plm(democracy_score ~ procedural + performance, data = datap, model = "within", effect = "twoways")
+# msummary(m4,output="gt", stars = TRUE)
+```
+
+```{r }
+m5 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN, data = datasp, model = "within", effect = "twoways")
+# msummary(m5,output="gt", stars = TRUE)
+```
+
+```{r }
+# signifi
+m6 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN +
+  lnGDP_m1 + Corrup_TI_m1 + Educ_yrs_m1 + Gini_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m6,output="gt", stars = TRUE)
+```
+
+```{r }
+m7.0 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z ,data = datasp, model = "within", effect = "twoways")
+m7 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m7,output="gt", stars = TRUE)
+```
+
+```{r }
+# sig
+m8 <- plm(democracy_score ~ procedural + performance + GDP_cp_within  +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m8,output="gt", stars = TRUE)
+```
+
+```{r }
+m9 <- plm(democracy_score ~ procedural + performance + GDP_cp_within ,
+  data = datasp, model = "within", effect = "twoways"
+)
+mlist <- list("OLS" = m1,
+  "Panel1" = m4,
+  "Panel2" = m7.0,
+  "Panel3" = m5,
+  "Panel2 lag" = m7,
+  "Panel3 lag" = m6
+  # "Panel4" = m8,
+  # "Panel5" = m9
+)
+
+```
+
+以下为回归表，第一、二个为没有加控制变量的模型，其后逐渐加控制变量和滞后项，procedural对于民主巩固有显著的正向影响，并且结果稳健。但，performance的影响不明显。
+
+```{r}
+msummary(mlist,
+         # output="gt",
+         coef_omit = "Intercept",
+         stars = TRUE,
+         coef_rename = c("lnGDP_imp" = "log GDP per capita", 
+                         "Corrup_TI_z" = "Corruption",
+         "Gini_SWIID" = "GINI index",
+         "Educ_yrs_UN" = "Years of education",
+         "lnGDP_m1" = "log GDP per capita,lagged one year",
+         "Corrup_TI_m1" = "Corruption, lagged one year",
+         "Educ_yrs_m1" ="Years of education, lagged one year",
+         "Gini_m1" = "Gini, lagged one year"))
+```
+
+# 十个变量
+
+使用前文七个变量+Q152、Q154、Q156生成两个IV（绩效民主和程序民主），时间跨度为1981-2022，观察值数量为2500左右。
+
+## DV
+
+Question: To what extent is the ideal of electoral democracy in its fullest sense achieved?
+
+Clariﬁcation: The electoral principle of democracy seeks to embody the core value of making rulers responsive to citizens, achieved through electoral competition for the electorate's approval under circumstances when suﬀrage is extensive; political and civil society organizations can operate freely; elections are clean and not marred by fraud or systematic irregularities; and elections aﬀect the composition of the chief executive of the country. In between elections, there is freedom of expression and an independent media capable of presenting alternative views on matters of political relevance. In the V-Dem conceptual scheme, electoral democracy is understood as an essential element of any other conception of representative democracy liberal, participatory, deliberative, egalitarian, or some other.
+
+```{r vdem2}
+Vdem <- readRDS("../data/Vdem/VDem_12.rds")
+Vdem <- Vdem %>%
+  dplyr::select(v2x_polyarchy, COWcode, year, country_id, country_name, country_text_id) %>%
+  rename(democracy_score = v2x_polyarchy)
+dem_mood_apsr <- read.csv("../replication/democratic_mood APSR_replication/dem_mood_apsr.csv") 
+  # rename( COWcode= COW_code,
+  #         year = Year)
+Vdem <- Vdem %>%
+  left_join(dem_mood_apsr[, c(
+    "COW_code",
+    "Year",
+    # "COWcode",
+    # "year",
+    "lnGDP_imp",
+    "lnGDP_m1",
+    "GDP_cp_btw",
+    "GDP_cp_within",
+    "Corrup_TI_z",
+    "Corrup_TI_m1",
+    "Corrup_within",
+    "Corrup_btw", 
+    "Gini_SWIID",
+    "Educ_yrs_UN",
+    "Educ_yrs_m1",
+    "Gini_m1",
+    "ISO_code"
+  )],
+  by = c("COWcode" = "COW_code", "year" = "Year","country_text_id" ="ISO_code")
+  # by = c("country_text_id" ="ISO_code", "year" = "Year")
+  ) %>% 
+  distinct()
+
+```
+
+```{r stan-demo-merge2}
+stan_procedual <- readRDS("../data/stan_procedual_6.rds")
+stan_performance <- readRDS("../data/stan_performance.rds")
+Vdem <- Vdem %>% 
+  rename( "Country" = "country_text_id",
+          "Year" = "year")
+Vdem <- Vdem %>% 
+  left_join(stan_performance) %>% 
+  rename( "performance" ="Satis_trim") %>% 
+  distinct()
+Vdem <- Vdem %>% 
+  left_join(stan_procedual) %>% 
+  rename( "procedural" ="Satis_trim") %>% 
+  distinct()
+
+Vdem_thin <- Vdem %>%
+  filter(!is.na(procedural) | !is.na(performance)) %>% 
+  distinct() 
+```
+
+## Plot: country-year
+
+数据的格式，数据共`r length(unique(Vdem_thin$COWcode))`个国家，`r length(unique(Vdem_thin$Year))`年。
+
+```{r echo = FALSE}
+head(Vdem_thin) %>% kable() %>% kable_styling()
+```
+
+白色区域为缺失的年份。
+
+```{r country-year2}
+plot1 <- ggplot(data = Vdem_thin) +
+  geom_point(aes(x = country_name, y = Year), shape = 15, size = 2.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.35, vjust = 0.5)) +
+  xlab("Country name") +
+  ylab("Year")
+plot1
+```
+
+## Regresion
+
+```{r lm2}
+m1 <- lm(democracy_score ~ procedural + performance, data = Vdem_thin)
+# msummary(m1,output="gt", stars = TRUE)
+```
+
+### Linear Model for Panel Data
+
+这个部分的结果和上一部分相差特别大，我认为并不是我们假设有问题，而是因为：
+
+1.  这部分的观察值和上一部分几乎一样，应该是哪里有bug
+2.  Q152、Q154、Q156这三个新加的题目可能和我们说关心的自变量关系不是特别大，我处理的方式是：
+    1.  对于程序民主，如果在Q152选择3，在Q154选择2、4，在Q156选择2、3，则赋值为1
+    2.  对于程序民主，如果在Q152选择1，在Q154选择3，在Q156选择1，则赋值为1
+
+```{r reg-plm2}
+datap <- pdata.frame(Vdem_thin, c("Country", "Year"))
+datasp <- datap[order(datap$Year), ]
+m4 <- plm(democracy_score ~ procedural + performance, data = datap, model = "within", effect = "twoways")
+# msummary(m4,output="gt", stars = TRUE)
+```
+
+```{r }
+m5 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN, data = datasp, model = "within", effect = "twoways")
+# msummary(m5,output="gt", stars = TRUE)
+```
+
+```{r }
+# signifi
+m6 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z + Gini_SWIID + Educ_yrs_UN +
+  lnGDP_m1 + Corrup_TI_m1 + Educ_yrs_m1 + Gini_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m6,output="gt", stars = TRUE)
+```
+
+```{r }
+m7.0 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z ,data = datasp, model = "within", effect = "twoways")
+m7 <- plm(democracy_score ~ procedural + performance + lnGDP_imp + Corrup_TI_z +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m7,output="gt", stars = TRUE)
+```
+
+```{r }
+# sig
+m8 <- plm(democracy_score ~ procedural + performance + GDP_cp_within  +
+  lnGDP_m1 + Corrup_TI_m1, data = datasp, model = "within", effect = "twoways")
+# msummary(m8,output="gt", stars = TRUE)
+```
+
+```{r }
+m9 <- plm(democracy_score ~ procedural + performance + GDP_cp_within ,
+  data = datasp, model = "within", effect = "twoways"
+)
+mlist <- list("OLS" = m1,
+  "Panel1" = m4,
+  "Panel2" = m7.0,
+  "Panel3" = m5,
+  "Panel2 lag" = m7,
+  "Panel3 lag" = m6
+  # "Panel4" = m8,
+  # "Panel5" = m9
+)
+```
+
+、
+
+```{r}
+msummary(mlist,
+         # output="gt",
+         coef_omit = "Intercept",
+         stars = TRUE,
+         coef_rename = c("lnGDP_imp" = "log GDP per capita", 
+                         "Corrup_TI_z" = "Corruption",
+         "Gini_SWIID" = "GINI index",
+         "Educ_yrs_UN" = "Years of education",
+         "lnGDP_m1" = "log GDP per capita,lagged one year",
+         "Corrup_TI_m1" = "Corruption, lagged one year",
+         "Educ_yrs_m1" ="Years of education, lagged one year",
+         "Gini_m1" = "Gini, lagged one year"))
+```
+
+# TODO
+
+-   fix观察值在模型中被删除的问题
+-   根据Classeen democracy mood那篇文章改进模型，包括两个自变量的滞后项，Error-correction Models和First-difference Models
+-   Classeen的协变量数据只到1988年，需要进行1981-1987协变量数据的补充。

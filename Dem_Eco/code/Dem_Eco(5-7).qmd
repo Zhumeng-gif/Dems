@@ -1,11 +1,12 @@
 ---
 title: "Dem_Eco(5-7)"
-format: html
+format:
+  html:
+    number-sections: true
 editor: visual
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup,include = FALSE,echo=FALSE}
 set.seed(313)
 options (warn = -1)
 setwd("/Users/zhumeng/Desktop/project/Dem_Eco/code")
@@ -15,7 +16,7 @@ p_load(
     mirt,
     kableExtra,
     psych, #KMOtest
-    mediation,
+    plm,
     MASS,
     car,
     here,
@@ -27,14 +28,7 @@ p_load(
 )
 ```
 
-# Some data
-
-```{r dataLoad}
-# IV
-#wvs_pr <- readRDS("/Users/zhumeng/Documents/GitHub/Dems/data/IV_bayesian/stan_procedual.rds") 
-#wvs_pe <- readRDS("/Users/zhumeng/Documents/GitHub/Dems/data/IV_bayesian/stan_performance.rds") 
-
-
+```{r dataloda,echo=FALSE}
 # wvs
 load("../data/WVST.rdata")
 wvs <- WVS_TimeSeries_1981_2022_spss_v3_0 %>%
@@ -79,7 +73,7 @@ wvs <- WVS_TimeSeries_1981_2022_spss_v3_0 %>%
 
 wvs$wave <- wvs$S002VS #波次命名
 wvs$wt <- wvs$S017 #权重
-wvs$year <- wvs$S020 #年份命名
+wvs$year <- as.factor(wvs$S020) #年份命名
 wvs$Country <- wvs$COUNTRY_ALPHA
 wvs$country <- wvs$COW_ALPHA
 wvs$cowCode<- wvs$COW_NUM
@@ -88,9 +82,11 @@ wvs[wvs < 0] <- NA
 
 ```
 
-## IV
+# IV
 
-```{r IV}
+自变量的选取与温泉哥哥一致，后面的贝叶斯插补也是用温泉哥哥的自变量数据。
+
+```{r echo=FALSE}
 ## 民主的基本特征
 wvs$rich_tax <- wvs$E224 #政府向富人征税补贴穷人
 wvs$regilous <- wvs$E225 #宗教当局拥有法律最终解释权
@@ -106,212 +102,262 @@ wvs$demo_importance <- wvs$E235 #认为民主的重要性 importance of
 
 ## CV
 
-```{r CV}
-ctr <- read.csv("/Users/zhumeng/Documents/GitHub/Dems/data/covs/dem_mood_apsr.csv") %>%
-  dplyr::select(
-    "COW_code",
-    "Year",
-    "lnGDP_imp",
-    "lnGDP_m1",
-    "GDP_cp_btw",
-    "GDP_cp_within",
-    "Corrup_TI_z",
-    "Corrup_TI_m1",
-    "Corrup_within",
-    "Corrup_btw", 
-    "Gini_SWIID",
-    "Educ_yrs_UN",
-    "Educ_yrs_m1",
-    "Gini_m1"
-  ) %>%
-  rename(
-    cowCode = COW_code,
-    year = Year
-  ) %>%
-  filter(., year %in% 2005:2017)
-  
+控制变量：民主水平、人口数量(对数)、预期寿命、石油收入占国家gdp的百分比、政府支出占GDP比重
 
-full_data <- left_join(wvs,ctr,
-                       by = c("cowCode","year"))
+```{r echo=FALSE}
+#人均gdp增长率
+gdppg <- readxl::read_xls("../cvdata/GDP per capita growth.xls", sheet = 1)  %>%
+  reshape2::melt(.,
+                 id.vars=c("Country","Country Name"),#要保留的主字段
+                 variable.name = "year",#转换后的分类字段名称（维度）
+                 value.name = "gdppg" #转换后的度量值名称
+                 ) %>%
+  filter(., year %in% 2005:2022)
+#gdp增长率
+gdpg <- readxl::read_xls("../cvdata/GDP growth.xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "gdpg" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+
+#人均gdp
+gdpp <- readxl::read_xls("../cvdata/GDP per capita (current US).xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "gdpp" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+gdpp$gdppl <- log(gdpp$gdpp)
+
+# gdp
+rgdp <- readxl::read_xlsx("../cvdata/pwt100.xlsx", sheet = 3) %>%
+  filter(., year %in% 2005:2022) 
+
+rgdp$rgdpl <- log(rgdp$rgdpna)
+rgdp$year <- as.factor(rgdp$year)
+rgdp$rgdpp <- rgdp$rgdpe/rgdp$pop/1000
+#总人口
+pop <- readxl::read_xls("../cvdata/Population.xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "pop" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+  
+pop$popL <- log(pop$pop)
+
+#人口增长率
+popg <- readxl::read_xls("../cvdata/Population growth (annual %).xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "popg" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+# 预期寿命
+exp <- readxl::read_xls("../cvdata/Life expectancy.xls", sheet = 1)%>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "exp" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+  
+#石油占国家gdps
+oil <- readxl::read_xls("../cvdata/Oil rents (% of GDP).xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "oil" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+#税收
+tax <- readxl::read_xls("../cvdata/Tax revenue (% of GDP).xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "tax" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+
+#政府支出占GDP比重
+expense <- readxl::read_xls("../cvdata/Expense (% of GDP).xls", sheet = 1) %>%
+  reshape2::melt(.,
+                 id.vars=c("Country"),
+                 variable.name = "year",
+                 value.name = "expense" 
+                 ) %>%
+  filter(., year %in% 2005:2022)
+#民主水平
+vdem <- read.csv("../cvdata/VDem_12.csv") %>%
+  dplyr::select(country_text_id,year,v2x_polyarchy) %>%
+  rename(democracy = v2x_polyarchy,
+         Country = country_text_id) %>%
+  filter(.,year %in% 2005:2022)
+vdem$year <- as.factor(vdem$year)
+
+ctr <- left_join(gdppg, gdpg, by = c("Country","year"))%>%
+  left_join(., gdpp, by = c("Country","year")) %>%
+  left_join(., popg, by = c("Country","year")) %>%
+  left_join(., pop, by = c("Country","year")) %>%
+  left_join(., oil, by = c("Country","year")) %>%
+  left_join(., tax, by = c("Country","year")) %>%
+  left_join(., exp, by = c("Country","year")) %>%
+  left_join(.,expense, by = c("Country","year")) %>%
+  left_join(., vdem, by = c("Country","year")) %>%
+  left_join(.,rgdp, by = c("Country","year"))
+
+ctr$year <- as.factor(ctr$year)
+
+write.csv(ctr,file = "../cvdata/ctr.csv" )
+```
+
+## merge all variable
+
+```{r echo=FALSE}
+# IV
+wvs_pr <- readRDS("/Users/zhumeng/Desktop/project/Dem_Eco/data/stan_procedual.rds") %>%
+  rename(
+    year = Year,
+    procedural = Satis_trim
+  ) 
+wvs_pe <- readRDS("/Users/zhumeng/Desktop/project/Dem_Eco/data/stan_performance_raw.rds") %>%
+  rename(
+    year = Year,
+    performance = Satis_trim
+  )
+
+wvs_pr37 <- readRDS("/Users/zhumeng/Desktop/project/Dem_Eco/data/stan_procedual_raw.rds") %>%
+  rename(
+    year = Year,
+    proceduralN = Satis_trim
+  )
+wvs_pe37 <- readRDS("/Users/zhumeng/Desktop/project/Dem_Eco/data/stan_performance_raw.rds") %>%
+  rename(
+    year = Year,
+    performanceN = Satis_trim
+  )
+
+iv <- left_join(wvs_pr, wvs_pe, by = c("Country","year")) %>% 
+  filter(., year %in% 2005:2022)
+iv$year <- as.factor(iv$year)
+
+full_data <- left_join(iv,ctr,by = c("Country","year"))
+
+rm(list = c("vdem","ctr","iv","oil","gdpp","gdppg","gdpg","tax","exp","pop","popg","expense","wvs_pe","wvs_pr"))
+
+#滞后
+full_data <- full_data %>% 
+  arrange(Country, year) %>% 
+  group_by(Country) %>% 
+  mutate(procedural1 = lag(procedural, n=1, order_by=Country)) %>%
+  mutate(procedural2 = lag(procedural, n=2, order_by=Country)) %>%
+  mutate(procedural5 = lag(procedural, n=5, order_by=Country)) %>%
+  mutate(performance1 = lag(performance, n=1, order_by=Country)) %>%
+  mutate(performance2 = lag(performance, n=2, order_by=Country)) %>%
+  mutate(performance5 = lag(performance, n=5, order_by=Country)) %>%
+  ungroup
+
+```
+
+# not use bayesian
+
+不使用贝叶斯进行插补，从2005年到2022年（5/6/7三波的数据）一共用170个国家，自变量直接为每个国家的加权平均值；回归结果如下： 1. model1:不对国家和时间进行固定效应时，程序性民主和绩效民主都符合预期 2. model2:model1+加上控制变量后，结果均不显著 3. model3:model2+加上年份固定，程序性民主不显著，绩效民主显著负影响(显著性为90%) 4. 加了国家后都不显著。
+
+Tips： 1. 考虑到在控制变量中含有国家的民主水平，因此如果非要解释，可以只固定时间。但我觉得意义不大。
+
+```{r echo=FALSE}
+# ols 不用贝叶斯插补的回归结果符合预期(未固定国家和时间)
+wvs <- left_join(wvs,full_data,by = c("Country","year"))
+
+wvs$performancet <- select(wvs,rich_tax, unempolyment_aid, inc_euqal) %>%
+  rowMeans(na.rm = TRUE)
+wvs$proceduralt <- select(wvs, election, protection,women_right) %>%
+  rowMeans(na.rm = TRUE)
+
+temp <- wvs %>%
+  filter(!is.na(proceduralt) | !is.na(performancet)) %>%
+  group_by(Country,year) %>%
+  summarise(
+    performanceC = weighted.mean(performancet, w = wt, na.rm = TRUE),
+    proceduralC = weighted.mean(proceduralt, w = wt, na.rm = TRUE)
+  )
+
+data <- left_join(temp,full_data,by = c("Country","year")) %>%
+  distinct()
+
+cm <- c("gdppl" = "人均GDP(log)",
+        "procedural" = "程序性民主",
+        "performance" = "绩效民主",
+        "democracy" = "民主水平",
+        "exp" = "预期寿命",
+        "tax" = "税收占比",
+        "popL" = "人口数量(log)",
+        "expense"  = "国家支出占比",
+        "performanceC" = "绩效民主",
+        "proceduralC" = "程序性民主")
+
+m1 <- lm(gdppl ~ performanceC+proceduralC, data = data)
+m2 <- lm(gdppl ~ performanceC+proceduralC+exp+popL+tax+democracy, data = data)
+m3 <- lm(gdppl ~ performanceC+proceduralC+popL+tax+democracy+as.factor(year)+as.factor(Country)+hc+rnnal, data = data)
+
+msummary(list(m1,m2,m3),output="gt", stars = TRUE,
+         coef_rename = cm,
+         coef_omit = "^as.factor") #不加国家和年份的固定效应复合预期；加了国家后都不显著；只固定年份程序性民主不显著，绩效民主负显著
+
+```
+
+# use bayesian
+
+## data decription
+
+```{r echo=FALSE}
+head(full_data) %>% kable() %>% kable_styling()
+```
+
+横轴为国家，纵轴为年份，使用贝叶斯方法后，数据点是满的。如果使用IRT方法，则只有300多个数据。
+
+```{r echo=FALSE}
+plot1 <- ggplot(data = full_data) +
+  geom_point(aes(x = Country, y = year), shape = 15, size = 2.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.35, vjust = 0.5)) +
+  xlab("Country name") +
+  ylab("Year")
+plot1
 ```
 
 ## panel data
 
-```{r}
+使用贝叶斯插补后，国家数据量扩大到1026个。现对回归结果做如下说明： 1. model1：只对时间进行了固定，忽视国家间差异的影响，结果符合预期。 2. model2：model1 + 控制变量。程序性民主仍然复合预期，绩效民主不再显著。 3. model3 & model4：只对国家进行了固定，忽视时间差异，结果不复合。 4. model5 & model6: 对时间和国家均进行了固定，程序性民主仍然复合预期，绩效民主有待商榷。 Tips： 1. 还是和上面的回归结果一样，由于我在控制变量中加入了国家民主水平，我们是否可以不固定国家？（如果在控制变量中去掉民主水平，结果还是不变，所以我想着不如加入，然后只控制年份？）
 
-full_data$performance <- select(full_data,rich_tax, unempolyment_aid, inc_euqal) %>%
-  rowMeans(na.rm = TRUE)
-full_data$procedural <- select(full_data, election, protection,women_right) %>%
-  rowMeans(na.rm = TRUE)
+```{r warning="false",echo=FALSE}
+### Linear Model for Panel Data
+full_data <- pdata.frame(full_data, c("Country", "year"))
 
-temp <- full_data %>%
-  filter(!is.na(procedural) | !is.na(performance)) %>%
-  group_by(wave, country) %>%
-  summarise(
-    performanceC = weighted.mean(performance, w = wt, na.rm = TRUE),
-    proceduralC = weighted.mean(procedural, w = wt, na.rm = TRUE)
-  )
-
-full_data <- left_join(full_data,temp,by = "country")
-
-rm(temp)
-
+pm1 <- plm(rgdpp ~ procedural+performance, data = full_data, model = "within", effect = "time") #检验不同时间是否存在差异（忽视个体影响)
+pm2 <- plm(gdppl ~ procedural+performance+popL+tax+exp+democracy, data = full_data, model = "within", effect = "time") 
+pm3 <- plm(gdppl ~ procedural+performance, data = full_data, model = "within", effect = "individual")
+pm4 <- plm(gdppl ~ procedural+performance+popL+tax+exp+democracy, data = full_data, model = "within", effect = "individual") 
+pm5 <- plm(rgdpp ~ procedural+performance, data = full_data, model = "within", effect = "twoways")
+pm6 <- plm(rgdpp ~ procedural+performance+popL+tax+democracy+hc+rnnal, data = full_data, model = "within", effect = "twoways") 
+msummary(list(pm5,pm6),output="gt", stars = TRUE,
+         coef_rename = cm)
 ```
 
-## regression
+另外，民主观念的影响是缓慢的，因此我还进行了滞后检验，对民主观念分别滞后了1/2/5年，结果如下： 1. 与没有滞后的结果相似，程序性民主显著正影响，绩效民主不显著。
 
-```{r regression}
-#  ols regression
-m1 <- lm(lnGDP_m1 ~ performanceC + proceduralC + as.factor(Country), data = full_data)
-msummary(m1,output="gt", stars = TRUE)
+```{r echo=FALSE}
+## lag
 
-# plm regression
+pml1 <- plm(gdppl ~ procedural1+performance1, data = full_data, model = "within", effect = "twoways") #检验不同时间是否存在差异（忽视个体影响)
+pml2 <- plm(gdppl ~ procedural1+performance1+popL+tax+democracy+rnnal+hc+rconnal, data = full_data, model = "within", effect = "twoways") 
+pml3 <- plm(gdppl ~ procedural2+performance2, data = full_data, model = "within", effect = "twoways")
+pml4 <- plm(gdppl ~ procedural2+performance2+popL+tax+exp+democracy+rnnal+hc+rconnal, data = full_data, model = "within", effect = "twoways") 
 
-library(plm)
-datap <- pdata.frame(full_data, index = c("Country", "wave"))
-datasp <- datap[order(datap$wave), ]
-
-
-
-```
-
-# Total data(可以不看)
-
-```{r dataClean2}
-#| echo = False
-#| eval = False
-
-wvs$year <- wvs$S020#年份命名
-wvs$countryCode <- wvs$S003 #国家命名
-wvs$countryN <- wvs$COUNTRY_ALPHA
-wvs$cowN<- wvs$COW_NUM
-wvs$Country <- wvs$COW_ALPHA
-wvs$wt <- wvs$S017
-wvs[wvs < 0] <- NA #将不符合问卷选项的回答标记为NA
-
-
-# Personal character
-wvs$sex_X001 <- wvs$X001 - 1 #性别
-wvs$birth_X002 <- wvs$Q261 #出生年
-wvs$age_X003 <- wvs$X003 #年龄
-wvs$rural_X050C <- wvs$X050C - 1 #(1:urban 2:rural)
-wvs$immigration_G027A <- wvs$G027A - 1 #是否出生在这个国家还是移民(1:本地人；2:移民)
-wvs$marriage_X007 <- if_else(wvs$X007 == 1, 1, 0) # 婚姻情况(1:已婚 2:像结婚一样生活在一起 3:离婚 4:分居 5:丧偶 6:单身)
-wvs$edu_X025A_01 <- wvs$X025A_01 #教育水平(原始数据0-8)
-wvs$eduR_X025R <- wvs$X025R #教育水平（重新划分为1-3）
-wvs$party_A068 <- wvs$A068 #党派成员
-wvs$party_A068[wvs$party_A068 == '1|2'] <- 1 #将活跃和不活跃的都变成是否
-wvs$jobSector_X052 <- wvs$X052 #(1:goverment 2:private sector 3:NGO)
-wvs$socialLevel_X045 <- wvs$X045#(1:upper 2:upper middle 3:lower meddle 4:working 5:lower)
-wvs$incomeLevel_X047 <- wvs$X047_WVS #(家庭收入属于哪一类群体 1:低收入 10:高收入)
-wvs$reilious_F025 <- wvs$F025#将属于新教和天主教的教徒单独编码 新教伦理与资本主义精神
-wvs$race_X051 <- wvs$X051 #(种族 1:白人 2:黑人 3:南亚印第安人 4:中国/日本等东亚黄种人 5:阿拉伯/中亚 6:其他)
-# !种族这里的编码好像不对，记得去看数据
-wvs$generation <- case_when(
-  wvs$X002 < 1950 ~ "Founding Time",
-  wvs$X002 >= 1950 & wvs$Q261 < 1966 ~ "Before Cultural Revolution",
-  wvs$X002 >= 1966 & wvs$Q261 < 1978 ~ "Cultural Revolution",
-  wvs$X002 >= 1978 ~ "Reform and Opening-Up",
-  TRUE ~ as.character(wvs$Q261)
-) %>%
-  factor(levels = c(
-    "Founding Time",
-    "Before Cultural Revolution",
-    "Cultural Revolution",
-    "Reform and Opening-Up"
-  )) #这一列主要对中国居民进行编码
-
-
-# Happyness 模块2 生活满意度
-wvs$happy_A170 <- wvs$A170 #你对你的整个生活有多满意？ 使用这张卡，其中1表示你“完全不满意”，10 表示你“完全满意”
-wvs$happyT_E277 <- Recode(wvs$E277,"2 = 0; 3 = 1; 1 = 2") #生活水平的代际差异：比较你的生活水平和你父母在你这个年龄时的生活水平，你会说你的生活更好，更糟，还是差不多？ （1:更好; 2:更糟糕;3:差不多）
-
-# socailCapital and socialTrust 模块3 社会信任
-
-wvs$trustCom_A165 <- wvs$A165 #一般来说，您认为大多数人是可以信任的，还是和人相处要越小心越好
-wvs$trustFam_D001_B <- 5-wvs$D001_B #请问您对家人是非常信任、比较信任、不太信任，还是非常不信任
-wvs$trustNei_G007_18_B <- 5-wvs$G007_18_B #请问您对熟人是非常信任、比较信任、不太信任，还是非常不信任
-wvs$trustArmy_E069_02 <- 5-wvs$E069_02 #对军队的信任度如何
-wvs$trustPolice_E069_06 <- 5-wvs$E069_06 #对警察的信任度如何
-wvs$trustCourt_E069_17 <- 5-wvs$E069_17 #对法院的信任度如何
-wvs$trustGoverment_E069_11 <- 5-wvs$E069_11 #对政府的信任度如何
-wvs$trustParty_E069_12 <- 5-wvs$E069_12 #对政党的信任度如何
-wvs$trustParliament_E069_07 <- 5-wvs$E069_07 #对人民代表大会的信任度如何
-
-# economy values
-wvs$incomeE_E035 <- wvs$E035 # 应该鼓励收入平等还是收入差距(income equal vs large income difference)
-wvs$ownership_E036 <- wvs$E036 # 应该提高私有制还是国有制(private vs state/government ownership of business)
-wvs$responsibility_E037 <- wvs$E037 # 人们应该承担更多的责任来自给自足还是政府应承担更多责任以确保每个人都有
-wvs$competition_E039 <- wvs$E039 #竞争是好的还是坏的（越靠近1认为越好）
-wvs$work_E040 <- wvs$E040 # 努力工作vs运气 的重要性（越靠近1认为努力工作越重要）
-wvs$priority_B008 <- wvs$B008 # 经济增长和环境谁优先（1:环境重要 2：经济增长重要 3:其他）
-
-# corruptuion
-wvs$corPer_E268 <- wvs$E268 # 是否存在腐败(1:不存在；10:腐败严重)
-wvs$corState_E269 <- wvs$E269 #您认为中央政府机关有多少人卷入了腐败(1:没有; 2: 少部分人；3: 大多数人 4: 所有人 )
-wvs$corBusi_E270 <- wvs$E270 # 商务部门主管(business executives)有多少人卷入了腐败
-wvs$corLocal_E271 <- wvs$E271 #您认为地方政府机关有多少人卷入了腐败
-wvs$corPublic_E272 <- wvs$E272 #您认为公共服务机构(police/civil servants/ doctor/teachers)有多少人卷入了腐败
-wvs$corMedia_E273 <- wvs$E273 # 您认为记者/媒体有多少人卷入了腐败
-wvs$corrisk_E276 <- wvs$E276 # 在这个国家，因提供或收受贿赂、礼物或好处以换取公共服务而被追究责任的风险有多大？ 为了表达您的意见，请使用 10 分制，其中“1”表示“完全没有风险”，“10”表示“非常高风险”。
-
-# migration 
-wvs$immiDev_G052 <- wvs$G052 #移民对发展的影响(5:very good vs 1：very bad)
-
-# security
-wvs$security_H001 <- 5 - wvs$H001 # 安全感知(1:非常安全；4：一点都不安全)
-wvs$freedom_equal_H008_07 <- wvs$H008_07 # 自由和平等谁更重要(1:自由；2：平等)
-wvs$freedom_security_H008_08 <- wvs$H008_08 # 自由和安全谁更重要(1:自由；2: 安全)
-wvs$nationlity_E012 <- wvs$E012 # 是否愿意为国家而战(1:yes; 2:no)
-
-
-#  postmateralist value  后物质主义价值观
-wvs$aimF_E001 <- wvs$E001 # 未来十年国家的发展目标1(第一选择 1:高水平经济增长；2:强大国防；3:人们在公共事务中有更多话语权；4:努力建设美丽的城市和乡村。1&2是物质主义价值观，3&4是后物质主义价值观)
-wvs$aimS_E002 <- wvs$E002 # 未来十年国家的发展目标1(第二选择)
-wvs$aimF_E003 <- wvs$E003 # 未来十年国家的发展目标2(第一选择 1:维护国家秩序；2:人们在政府决策中有更多的发言权；3:打击物价上涨；4:保护言论自由 1&3是物质主义价值观)
-wvs$aimS_E004 <- wvs$E004 # 未来十年国家的发展目标2(第二选择)
-wvs$aimF_E005 <- wvs$E005 # 未来十年国家的发展目标3(第一选择 1:稳定经济；2:构建更人性化的社会；3:构建观念比财富更重要的社会；4:打击犯罪 1&4是物质主义)
-wvs$aimS_E006 <- wvs$E006 # 未来十年国家的发展目标3(第二选择)
-
-
-# religious value 宗教价值观
-wvs$god_F063 <- wvs$F063 # 上帝的重要性(1:一点也不重要 10:很重要)
-
-# ethical value 道德价值观(这里包含伦理价值观的测量) socialTolerance
-wvs$toleranceHomo_F118 <- wvs$F118 #hemosexcuality 同性恋 （1:不赞同 10:永远赞同）
-wvs$tolerancePros_F119 <- wvs$F119 #prostitution 卖淫
-wvs$toleranceAbor_F120 <- wvs$F120 # abortion 堕胎
-wvs$toleranceDivo_F121 <- wvs$F121 # divorce 离婚
-wvs$toleranceSexb_F135A <- wvs$F135A #sex before marriage 婚前性行为
-wvs$toleranceSuic_F123 <- wvs$F123 #suicide 自杀
-wvs$toleranceEuth_F122 <- wvs$F122 #Euthanasia 安乐死
-wvs$tolerancePena_F144_02 <- wvs$F144_02 # death penalty 死刑
-
-# political culture and regimes
-wvs$sysLead_E114 <- 5 -wvs$E114 # 有一个不必为议会选举的强大领导人(1:very good 4:very bad 所以用5减 反向赋值)
-wvs$sysArmy_E116 <- 5 - wvs$E116 # 有军队统治
-wvs$sysDemo_E117 <- 5 - wvs$E117 # 拥有民主的政治体系
-wvs$sysRegi_E117B <- 5 - wvs$E117B # 由不需要政党或选举的宗教法律管辖的制度
-#wvs$sysPerf_q252 <- wvs$Q252 #（好像没有这个问题 #对当前政治体系/制度表现的满意度 satisfaction with the political performrance
-wvs$indiviRight_E123 <- 5 - wvs$E123 #对人权的尊重(反向赋值后 越高越尊重)
-wvs$prideNation_G006 <- 5- wvs$G006 #国家自豪感
-
-
-## 民主的基本特征
-wvs$demoTax_E224 <- wvs$E224 #政府向富人征税补贴穷人
-wvs$demoRegilous_E225 <- wvs$E225 #宗教当局拥有法律最终解释权
-wvs$demoSelect_E226 <- wvs$E226 #自由选择领导人
-wvs$demoAid_E227 <- wvs$E227 #国家救济失业人员
-wvs$demoArmy_E228 <- wvs$E228 #军队接管无能政府
-wvs$demoCivil_E229 <- wvs$E229 #公民权利免受国家压迫
-wvs$demoEquality_E233A <- wvs$E233A #国家需要促进收入平等
-wvs$demoObey_E233B <- wvs$E233B #人们服从领导人
-wvs$demoWomen_E233 <- wvs$E233 #妇女与男子享有同等权利
-wvs$demoImportance_E235 <- wvs$E235 #认为民主的重要性 importance of democracy
-wvs$demoLevel_E236 <- wvs$E236 #国家的民主水平
-
-
-# political interest and participation 政治兴趣与政治参与
-wvs$polityInt_E023 <- wvs$E023 #对政治感兴趣的程度(1:非常感兴趣；4:一点都不感兴趣)
-wvs$polityDis_A062 <- wvs$A062 #讨论政治事件的频率(1:经常；2:偶尔；3:从不)
+msummary(list(pml1,pml2,pml3,pml4),output="gt", stars = TRUE)
 ```
